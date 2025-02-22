@@ -1,6 +1,6 @@
 # Async cancel
 
-Nim stdlib asyncdispatch does not support canceling yet. However, we can apply the [Golang context](https://pkg.go.dev/context) approach to get explicit async canceling.
+Nim stdlib asyncdispatch does not support [future cancelation](https://github.com/nim-lang/RFCs/issues/304) yet. However, we can apply the [Golang context](https://pkg.go.dev/context) approach to get explicit async canceling.
 
 ## The problem
 
@@ -40,12 +40,12 @@ waitFor main()
 echo "ok"
 ```
 
-We usually want `foo` to return immediately on cancelation to avoid running the happy path as if `await` completed succesfully. We can use `fail` to throw an `AsyncCancelError` on cancel:
+We usually want `foo` to break immediately on cancelation to avoid running the happy path as if `await` completed succesfully. We can use `fail` to throw an `AsyncCancelError` on cancel:
 
 ```nim
 import std/asyncdispatch
 
-type AsyncCancelError = object of ValueError
+type AsyncCancelError = object of CatchableError
 
 proc cancel(c: Future[void]) =
   c.fail(newException(AsyncCancelError, "canceled"))
@@ -82,7 +82,7 @@ Rather than deriving a context (the child) from another context (the parent), we
 ```nim
 import std/asyncdispatch
 
-type AsyncCancelError = object of ValueError
+type AsyncCancelError = object of CatchableError
 
 proc cancel(c: Future[void]) =
   c.fail(newException(AsyncCancelError, "canceled"))
@@ -98,7 +98,7 @@ proc foo(c: Future[void]) {.async.} =
   let cc = newFuture[void]()
   cc.cancel()
   try:
-    await bar(c or cc)
+    await bar(c or cc) or c
   except AsyncCancelError:
     echo "foo got canceled"
     raise
@@ -128,7 +128,7 @@ We can cancel on a timeout by using asyncdispatch `withTimeout`:
 ```nim
 import std/asyncdispatch
 
-type AsyncCancelError = object of ValueError
+type AsyncCancelError = object of CatchableError
 
 proc cancel(c: Future[void]) =
   c.fail(newException(AsyncCancelError, "canceled"))
@@ -165,7 +165,7 @@ A more ergonomic timeout:
 ```nim
 import std/asyncdispatch
 
-type AsyncCancelError = object of ValueError
+type AsyncCancelError = object of CatchableError
 
 proc cancel(c: Future[void]) =
   c.fail(newException(AsyncCancelError, "canceled"))
@@ -207,9 +207,9 @@ An alternative to explicit cancelling is to close some FD. For web servers/clien
 
 ## (Bonus) The sleepAsync problem
 
-Whenever you call sleepAsync, a timer gets registered into the "global dispatcher", and it's not removed until the timer expires. If you do `await sleepAsync(900000) or c` in the above example, a timer will live for 15 minutes before it finally expires.
+Whenever you call sleepAsync, a timer gets registered into the "global dispatcher", and it's not removed until the timer expires. If you do `await sleepAsync(900000) or c` in the above example, a timer will live for 15 minutes before it finally expires. Under some circumstances this may use a lot of memory.
 
-Here's a demostration:
+Here's a demonstration:
 
 ```nim
 import std/asyncdispatch
@@ -237,13 +237,13 @@ echo "ok"
 # ok
 ```
 
-Under some circumstances this may look like a memory leak. Lets make it cancelable:
+Lets make it cancelable:
 
 ```nim
 import std/asyncdispatch
 import std/heapqueue
 
-type AsyncCancelError = object of ValueError
+type AsyncCancelError = object of CatchableError
 
 proc cancel(c: Future[void]) =
   c.fail(newException(AsyncCancelError, "canceled"))
@@ -282,7 +282,7 @@ echo "ok"
 # ok
 ```
 
-However, this cancelable `sleepAsync` has at least one flaw: what if we block the event loop for too long? the sleep time will accumulate the blocked time. If we sleep 15 minutes, and block for 15 minutes, the total sleep time will be 30 minutes. To fix this we would need to use a monotonic clock to check how much time has past, and return once the 15 min are up.
+However, this cancelable `sleepAsync` has at least one flaw: what if we block the event loop for too long? the sleep time will accumulate the blocked time. If we sleep 15 minutes, and block for 15 minutes, the total sleep time will be 30 minutes. To fix this we would need to use a monotonic clock to check how much time has passed, and return once the 15 min are up.
 
 ## License
 
