@@ -207,7 +207,7 @@ An alternative to explicit cancelling is to close some FD. For web servers/clien
 
 ## (Bonus) The sleepAsync problem
 
-Whenever you call sleepAsync, a timer gets registered into the "global dispatcher", and it's not removed until the timer expires. If you do `await sleepAsync(900000) or c` in the above example, a timer will live for 15 minutes before it finally expires. Under some circumstances this may use a lot of memory.
+Whenever you call sleepAsync, a timer gets registered into the "global dispatcher", and it's not removed until the timer expires. If you do `await sleepAsync(900000) or c` in the above example, a timer will live for 15 minutes before it finally expires. Under some circumstances this may not be desirable.
 
 Here's a demonstration:
 
