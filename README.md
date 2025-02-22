@@ -1,6 +1,8 @@
 # Async cancel
 
-Nim stdlib asyncdispatch does not support [future cancelation](https://github.com/nim-lang/RFCs/issues/304) yet. However, we can apply the [Golang context](https://pkg.go.dev/context) approach to get explicit async canceling.
+Nim stdlib asyncdispatch does not support [future cancelation](https://github.com/nim-lang/RFCs/issues/304) yet. In the meantime, we can apply the [Golang context](https://pkg.go.dev/context) approach to get explicit async canceling.
+
+> Note: I've never needed this, and just closing some FD has worked in all cases I've encountered so far. Also, I find the approach described here too explicit, and somewhat annoying; but that's personal taste. May also not be optimal compared to a native solution.
 
 ## The problem
 
