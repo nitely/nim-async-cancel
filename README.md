@@ -100,7 +100,8 @@ proc foo(c: Future[void]) {.async.} =
   let cc = newFuture[void]()
   cc.cancel()
   try:
-    await bar(c or cc) or c
+    # do not `or c` here, just let the most inner future propagate the cancel error
+    await bar(c or cc)
   except AsyncCancelError:
     echo "foo got canceled"
     raise
@@ -122,6 +123,11 @@ echo "ok"
 # foo got canceled
 # ok
 ```
+
+Usually pass the context around and let the most inner future propagate
+the cancel error up the stack. This enables except/finally
+to do clean up in proper order. A common clean up example is for an
+inner future to `socket.send` an error message, before the socket is closed by a parent future.
 
 ## With Timeout
 
