@@ -131,7 +131,7 @@ inner future to `socket.send` an error message, before the socket is closed by a
 
 ## With Timeout
 
-We can cancel on a timeout by using asyncdispatch `withTimeout`:
+We can cancel on a timeout using `withTimeout`:
 
 ```nim
 import std/asyncdispatch
@@ -143,7 +143,7 @@ proc cancel(c: Future[void]) =
 
 proc foo(c: Future[void]) {.async.} =
   try:
-    await sleepAsync(10000) or c
+    await sleepAsync(10_000) or c
   except AsyncCancelError:
     echo "foo got canceled"
     raise
@@ -211,9 +211,9 @@ echo "ok"
 
 ## Just close the FD?
 
-An alternative to explicit cancelling is to close some FD. For web servers/clients this is usually a socket. After closing the socket, trying to recv or send on it will throw an error that will propagate up the call stack. Effectively canceling the futures. The downside is the socket needs to be passed around down the call stack, which some may not like.
+An alternative to explicit canceling is to close some FD. For web servers/clients this is usually a socket. After closing the socket, trying to recv or send on it will throw an error that will propagate up the call stack. Effectively canceling the futures. The downside is the socket needs to be passed around down the call stack, which some may not like.
 
-## (Bonus) The sleepAsync problem
+## (Bonus) Cancelable sleepAsync
 
 Whenever you call sleepAsync, a timer gets registered into the "global dispatcher", and it's not removed until the timer expires. If you do `await sleepAsync(900000) or c` in the above example, a timer will live for 15 minutes before it finally expires. Under some circumstances this may not be desirable.
 
@@ -259,15 +259,14 @@ proc cancel(c: Future[void]) =
 proc sleepAsync(timeout: Natural, c: Future[void]) {.async.} =
   var timeLeft = timeout
   let ms = min(timeLeft, 100)
-  try:
-    while timeLeft > 0 and not c.finished:
-      await sleepAsync(min(timeLeft, ms)) or c
-      timeLeft -= ms
-  except AsyncCancelError:
-    discard
+  while timeLeft > 0:
+    if c.finished:  # avoid sleep if already canceled
+      c.read()
+    await sleepAsync(min(timeLeft, ms)) or c
+    timeLeft -= ms
 
 proc foo(c: Future[void]) {.async.} =
-  await sleepAsync(10_000, c) or c
+  await sleepAsync(10_000, c)
 
 proc main {.async.} =
   var c = newFuture[void]()
@@ -290,7 +289,52 @@ echo "ok"
 # ok
 ```
 
-However, this cancelable `sleepAsync` has at least one flaw: what if we block the event loop for too long? the sleep time will accumulate the blocked time. If we sleep 15 minutes, and block for 15 minutes, the total sleep time will be 30 minutes. To fix this we would need to use a monotonic clock to check how much time has passed, and return once the 15 min are up.
+However, this cancelable `sleepAsync` has at least one flaw: what if we block the event loop for too long? the sleep time will accumulate the blocked time. If we sleep 15 minutes, and block for 15 minutes, the total sleep time will be 30 minutes.
+
+Let's fix that using a monotonic clock:
+
+```nim
+import std/[asyncdispatch, heapqueue, monotimes, times]
+
+type AsyncCancelError = object of CatchableError
+
+proc cancel(c: Future[void]) =
+  c.fail(newException(AsyncCancelError, "canceled"))
+
+proc sleepAsync(timeout: Natural, c: Future[void]) {.async.} =
+  let ms = min(timeout, 100)
+  let deadline = getMonoTime()+initDuration(milliseconds=timeout)
+  var timeLeft = inMilliseconds(deadline-getMonoTime()).int
+  while timeLeft > 0:
+    if c.finished: c.read()
+    await sleepAsync(min(timeLeft, ms)) or c
+    timeLeft = inMilliseconds(deadline-getMonoTime()).int
+
+proc foo(c: Future[void]) {.async.} =
+  await sleepAsync(10_000, c)
+
+proc main {.async.} =
+  var c = newFuture[void]()
+  c.cancel()
+  for _ in 0 .. 100:
+    try:
+      await foo(c)
+    except AsyncCancelError:
+      discard
+
+discard getGlobalDispatcher()
+waitFor main()
+echo "has pending operations:", hasPendingOperations()
+echo "timers:", getGlobalDispatcher().timers.len
+echo "ok"
+
+# Output:
+# has pending operations:false
+# timers:0
+# ok
+```
+
+There is a trade off that both implementations share. Because of `min(timeout, 100)` the timer may live up to 100ms after getting canceled. We could decrease the sleep timer at the cost of increasing the event loop work load. Alternatively, we could implement an FD based timer which can be canceled right away (closing the FD).
 
 ## License
 
