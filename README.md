@@ -257,7 +257,7 @@ proc cancel(c: Future[void]) =
   c.fail(newException(AsyncCancelError, "canceled"))
 
 proc sleepAsync(timeout: Natural, c: Future[void]) {.async.} =
-  var timeLeft = timeout
+  var timeLeft = timeout.int
   let ms = min(timeLeft, 100)
   while timeLeft > 0:
     if c.finished:  # avoid sleep if already canceled
